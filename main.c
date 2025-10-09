@@ -2,9 +2,18 @@
 #include <stdio.h>
 #include <time.h>
 
+// Global variables for view/edit mode
+static BOOL isViewMode = FALSE;
+static HWND hwndSaveBtn = NULL;
+static HWND hwndCancelBtn = NULL;
+static char originalContent[4096] = {0};
+
 #define ID_INPUT 1
 #define ID_ADD 2
-#define ID_EXPORT 3
+#define ID_VIEW 3
+#define ID_EXPORT 4
+#define ID_SAVE 5
+#define ID_CANCEL 6
 
 // Function declarations
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
@@ -19,6 +28,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     wc.lpfnWndProc = WindowProc;
     wc.hInstance = hInstance;
     wc.lpszClassName = CLASS_NAME;
+    wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);  // Set window background color
 
     RegisterClass(&wc);
 
@@ -79,11 +89,22 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             NULL
         );
 
+        CreateWindow(
+            "BUTTON",
+            "View Entry",
+            WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+            140, 290, 100, 30,
+            hwnd,
+            (HMENU)ID_VIEW,
+            GetModuleHandle(NULL),
+            NULL
+        );
+
         hwndExportBtn = CreateWindow(
             "BUTTON",
             "Export",
             WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-            140, 290, 100, 30,
+            260, 290, 100, 30,
             hwnd,
             (HMENU)ID_EXPORT,
             GetModuleHandle(NULL),
@@ -94,11 +115,163 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
         case ID_ADD:
-            AddLogEntry(hwndInput);
+            if (!isViewMode) {
+                AddLogEntry(hwndInput);
+            }
+            break;
+        case ID_VIEW:
+            if (!isViewMode) {
+                // Load content from file
+                FILE *file = fopen("WorkLog.txt", "r");
+                if (!file) {
+                    MessageBox(NULL, "No entries to view!", "Error", MB_OK | MB_ICONERROR);
+                    break;
+                }
+
+                // Read file content
+                char buffer[4096] = {0};
+                size_t bytesRead = fread(buffer, 1, sizeof(buffer) - 1, file);
+                fclose(file);
+
+                if (bytesRead == 0) {
+                    MessageBox(NULL, "No entries to view!", "Error", MB_OK | MB_ICONERROR);
+                    break;
+                }
+
+                // Store original content
+                strcpy(originalContent, buffer);
+
+                // Show content in input box
+                SetWindowText(hwndInput, buffer);
+
+                // Hide regular buttons and show Save/Cancel buttons
+                ShowWindow(hwndAddBtn, SW_HIDE);
+                ShowWindow(GetDlgItem(hwnd, ID_VIEW), SW_HIDE);
+                ShowWindow(hwndExportBtn, SW_HIDE);
+
+                // Create Save and Cancel buttons
+                hwndSaveBtn = CreateWindow(
+                    "BUTTON", "Save Changes",
+                    WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
+                    20, 290, 100, 30,
+                    hwnd, (HMENU)ID_SAVE,
+                    GetModuleHandle(NULL), NULL
+                );
+
+                hwndCancelBtn = CreateWindow(
+                    "BUTTON", "Cancel",
+                    WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+                    140, 290, 100, 30,
+                    hwnd, (HMENU)ID_CANCEL,
+                    GetModuleHandle(NULL), NULL
+                );
+
+                isViewMode = TRUE;
+            }
+            break;
+        case ID_SAVE:
+            if (isViewMode) {
+                // Get current content
+                char newContent[4096];
+                GetWindowText(hwndInput, newContent, sizeof(newContent));
+
+                // Save to file
+                FILE *file = fopen("WorkLog.txt", "w");
+                if (file) {
+                    fputs(newContent, file);
+                    fclose(file);
+                    MessageBox(NULL, "Changes saved successfully!", "Success", MB_OK | MB_ICONINFORMATION);
+                }
+
+                // Clear the input field before exiting view mode
+                SetWindowText(hwndInput, "");
+                
+                // Exit view mode
+                goto exit_view_mode;
+            }
+            break;
+        case ID_CANCEL:
+            if (isViewMode) {
+                // Clear the input field
+                SetWindowText(hwndInput, "");
+exit_view_mode:
+                // Clean up view mode
+                DestroyWindow(hwndSaveBtn);
+                DestroyWindow(hwndCancelBtn);
+                hwndSaveBtn = hwndCancelBtn = NULL;
+
+                // Show regular buttons
+                ShowWindow(hwndAddBtn, SW_SHOW);
+                ShowWindow(GetDlgItem(hwnd, ID_VIEW), SW_SHOW);
+                ShowWindow(hwndExportBtn, SW_SHOW);
+
+                isViewMode = FALSE;
+            }
             break;
         case ID_EXPORT:
-            ExportLog();
+            if (!isViewMode) {
+                ExportLog();
+            }
             break;
+        }
+        break;
+
+    case WM_ERASEBKGND:
+        {
+            RECT rect;
+            HDC hdc = (HDC)wParam;
+            GetClientRect(hwnd, &rect);
+            FillRect(hdc, &rect, (HBRUSH)(COLOR_WINDOW + 1));
+            return TRUE;
+        }
+        break;
+
+    case WM_SIZE:
+        {
+            // Get the dimensions of the client area
+            RECT rcClient;
+            GetClientRect(hwnd, &rcClient);
+            
+            // Calculate margins and spacing
+            int margin = 20;
+            int buttonHeight = 30;
+            int buttonWidth = 100;
+            int buttonSpacing = 20;
+            
+            // Calculate the height for the input box (leave space for buttons at bottom)
+            int inputHeight = rcClient.bottom - (margin * 2 + buttonHeight);
+            
+            // Resize the input box
+            MoveWindow(hwndInput,
+                margin,                                    // x position
+                margin,                                    // y position
+                rcClient.right - (margin * 2),            // width
+                inputHeight - margin,                      // height
+                TRUE);
+            
+            // Position the buttons at the bottom
+            MoveWindow(hwndAddBtn,
+                margin,                                    // x position
+                rcClient.bottom - (margin + buttonHeight), // y position
+                buttonWidth,                              // width
+                buttonHeight,                             // height
+                TRUE);
+                
+            // Position View Entry button
+            MoveWindow(GetDlgItem(hwnd, ID_VIEW),
+                margin + buttonWidth + buttonSpacing,      // x position
+                rcClient.bottom - (margin + buttonHeight), // y position
+                buttonWidth,                              // width
+                buttonHeight,                             // height
+                TRUE);
+
+            // Position Export button
+            MoveWindow(hwndExportBtn,
+                margin + (buttonWidth + buttonSpacing) * 2, // x position
+                rcClient.bottom - (margin + buttonHeight),  // y position
+                buttonWidth,                               // width
+                buttonHeight,                              // height
+                TRUE);
         }
         break;
 
