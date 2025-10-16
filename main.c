@@ -128,9 +128,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     break;
                 }
 
-                // Read file content
-                char buffer[4096] = {0};
-                size_t bytesRead = fread(buffer, 1, sizeof(buffer) - 1, file);
+                // Read file content and normalize line endings to CRLF for the edit control
+                char raw[4096] = {0};
+                size_t bytesRead = fread(raw, 1, sizeof(raw) - 1, file);
                 fclose(file);
 
                 if (bytesRead == 0) {
@@ -138,11 +138,35 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     break;
                 }
 
-                // Store original content
-                strcpy(originalContent, buffer);
+                // Convert lone LF to CRLF so the Windows edit control shows new lines correctly.
+                // Use a larger buffer for converted content.
+                char converted[8192] = {0};
+                size_t ri = 0, wi = 0;
+                for (ri = 0; ri < bytesRead && wi + 2 < sizeof(converted); ++ri) {
+                    unsigned char c = raw[ri];
+                    if (c == '\r') {
+                        // keep CR as-is
+                        converted[wi++] = '\r';
+                        // If next is LF, it'll be handled in next iteration and appended
+                    } else if (c == '\n') {
+                        // If previous char wasn't CR, insert CR before LF
+                        if (ri == 0 || raw[ri - 1] != '\r') {
+                            converted[wi++] = '\r';
+                        }
+                        converted[wi++] = '\n';
+                    } else {
+                        converted[wi++] = c;
+                    }
+                }
+
+                // Ensure null-terminated
+                converted[wi] = '\0';
+
+                // Store original content (raw) for possible later comparison
+                strncpy(originalContent, converted, sizeof(originalContent) - 1);
 
                 // Show content in input box
-                SetWindowText(hwndInput, buffer);
+                SetWindowText(hwndInput, converted);
 
                 // Hide regular buttons and show Save/Cancel buttons
                 ShowWindow(hwndAddBtn, SW_HIDE);
@@ -295,15 +319,43 @@ void AddLogEntry(HWND hwndInput) {
         return;
     }
 
-    FILE *file = fopen("WorkLog.txt", "a");
+    // Open file for update so we can check last character
+    FILE *file = fopen("WorkLog.txt", "a+");
     if (!file) {
         MessageBox(NULL, "Could not open log file!", "Error", MB_OK | MB_ICONERROR);
         return;
     }
 
+    // Move to end and check if file is non-empty and doesn't end with a newline
+    int needSep = 0;
+    if (fseek(file, 0, SEEK_END) == 0) {
+        long pos = ftell(file);
+        if (pos > 0) {
+            // Go back one char to read last byte
+            if (fseek(file, -1, SEEK_END) == 0) {
+                int last = fgetc(file);
+                if (last != '\n' && last != '\r') {
+                    needSep = 1;
+                }
+            }
+        }
+    }
+
     time_t now = time(NULL);
     struct tm *t = localtime(&now);
-    fprintf(file, "[%02d:%02d] %s\n", t->tm_hour, t->tm_min, text);
+
+    if (needSep) {
+        // write CRLF separator
+        fputc('\r', file);
+        fputc('\n', file);
+    }
+
+    // Convert to 12-hour format with am/pm
+    int hour12 = t->tm_hour % 12;
+    if (hour12 == 0) hour12 = 12; // midnight or noon -> 12
+    const char *ampm = (t->tm_hour >= 12) ? "pm" : "am";
+    // Write entry with CRLF line ending and am/pm
+    fprintf(file, "[%d:%02d%s] %s\r\n", hour12, t->tm_min, ampm, text);
     fclose(file);
 
     SetWindowText(hwndInput, ""); // clear input box
