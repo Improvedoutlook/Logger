@@ -1,0 +1,2 @@
+/* Resource script to embed the application icon into the executable */
+1 ICON "Logger_icon.ico"

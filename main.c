@@ -17,8 +17,12 @@ static char originalContent[4096] = {0};
 
 // Function declarations
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+LRESULT CALLBACK EditProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 void AddLogEntry(HWND hwndInput);
 void ExportLog();
+
+// Keep original edit control procedure so we can forward messages we don't handle
+static WNDPROC g_oldEditProc = NULL;
 
 // Entry point
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
@@ -77,6 +81,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             GetModuleHandle(NULL),
             NULL
         );
+
+        // Subclass the edit control so we can handle Ctrl+A (select all)
+        if (hwndInput) {
+            g_oldEditProc = (WNDPROC)SetWindowLongPtr(hwndInput, GWLP_WNDPROC, (LONG_PTR)EditProc);
+        }
 
         hwndAddBtn = CreateWindow(
             "BUTTON",
@@ -392,4 +401,24 @@ void ExportLog() {
     fclose(dest);
 
     MessageBox(NULL, "Daily log exported!", "Export Complete", MB_OK | MB_ICONINFORMATION);
+}
+
+// Subclassed edit control procedure to support Ctrl+A for 'select all'
+LRESULT CALLBACK EditProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    switch (uMsg) {
+    case WM_KEYDOWN:
+        // Check for Ctrl+A (VK_CONTROL held + 'A' or 'a')
+        if ((GetKeyState(VK_CONTROL) & 0x8000) && (wParam == 'A' || wParam == 'a')) {
+            // Select all text: start = 0, end = -1 selects all
+            SendMessage(hwnd, EM_SETSEL, 0, -1);
+            return 0; // handled
+        }
+        break;
+    }
+
+    // Forward other messages to the original window procedure
+    if (g_oldEditProc) {
+        return CallWindowProc(g_oldEditProc, hwnd, uMsg, wParam, lParam);
+    }
+    return DefWindowProc(hwnd, uMsg, wParam, lParam);
 }
