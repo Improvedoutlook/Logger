@@ -7,6 +7,7 @@ static BOOL isViewMode = FALSE;
 static HWND hwndSaveBtn = NULL;
 static HWND hwndCancelBtn = NULL;
 static char originalContent[4096] = {0};
+static char mainInputBackup[4096] = {0};
 
 #define ID_INPUT 1
 #define ID_ADD 2
@@ -130,6 +131,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             break;
         case ID_VIEW:
             if (!isViewMode) {
+                // Backup whatever the user has typed in the main input so we can restore it
+                if (hwndInput) {
+                    GetWindowText(hwndInput, mainInputBackup, sizeof(mainInputBackup));
+                }
                 // Load content from file
                 FILE *file = fopen("WorkLog.txt", "r");
                 if (!file) {
@@ -174,7 +179,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 // Store original content (raw) for possible later comparison
                 strncpy(originalContent, converted, sizeof(originalContent) - 1);
 
-                // Show content in input box
+                // Show content in input box (this temporarily replaces what was in the main input)
                 SetWindowText(hwndInput, converted);
 
                 // Hide regular buttons and show Save/Cancel buttons
@@ -216,8 +221,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     MessageBox(NULL, "Changes saved successfully!", "Success", MB_OK | MB_ICONINFORMATION);
                 }
 
-                // Clear the input field before exiting view mode
-                SetWindowText(hwndInput, "");
+                // Restore the user's previous main input (preserve what they were typing)
+                SetWindowText(hwndInput, mainInputBackup);
                 
                 // Exit view mode
                 goto exit_view_mode;
@@ -225,8 +230,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             break;
         case ID_CANCEL:
             if (isViewMode) {
-                // Clear the input field
-                SetWindowText(hwndInput, "");
+                // Restore the user's previous main input (preserve what they were typing)
+                SetWindowText(hwndInput, mainInputBackup);
 exit_view_mode:
                 // Clean up view mode
                 DestroyWindow(hwndSaveBtn);

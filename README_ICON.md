@@ -33,5 +33,34 @@ Troubleshooting / Notes:
 - Explorer caches file icons. If the EXE still shows the old icon after rebuilding, clear the icon cache or create a new shortcut to the EXE and refresh Explorer. Log out/log in or reboot if necessary.
 - If you use a shortcut (on Desktop or Start Menu), Windows will use the icon embedded in the EXE unless the shortcut explicitly has a different icon set.
 - Make sure your `.ico` file contains Windows-friendly sizes (16x16, 32x32, 48x48, 256x256). Many icon designers/exporters produce multi-size `.ico` files.
+ 
+Quick short build commands
+
+Two tiny wrappers are included for convenience:
+
+- `LoggerBuild.cmd` — run this from Explorer or CMD/PowerShell in the project folder to build `Logger.exe` as a GUI app.
+- `LoggerBuild.ps1` — PowerShell wrapper that calls `build.ps1` with `-Gui`.
+
+Example (PowerShell):
+
+```powershell
+.\LoggerBuild.ps1
+```
+
+Or (CMD or PowerShell):
+
+```powershell
+.\LoggerBuild.cmd
+```
+
+Console (debug) build wrappers
+
+If you want a console build (so the app opens a terminal window), use the `LoggerBuildC` wrappers which build `Logger_console.exe`:
+
+```powershell
+.\LoggerBuildC.ps1
+.\LoggerBuildC.cmd
+```
+
 
 
