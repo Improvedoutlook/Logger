@@ -41,7 +41,7 @@ function Build-With-Mingw {
     }
     if ($LASTEXITCODE -ne 0) { throw "gcc failed" }
 
-    Write-Host "Built $Output with embedded icon." -ForegroundColor Green
+    Write-Host "Built $Output successfully." -ForegroundColor Green
 }
 
 function Build-With-VisualStudio {
