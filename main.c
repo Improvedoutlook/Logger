@@ -127,7 +127,7 @@ void CALLBACK SpellCheckTimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD 
         HWND hwndMain = GetParent(g_hwndInput);
         if (hwndMain) {
             char titleText[256];
-            snprintf(titleText, sizeof(titleText), "Work Log Aggregator - %d spelling error(s)", 
+            snprintf(titleText, sizeof(titleText), "Logger- Your Work Log Aggregator! - %d spelling error(s)", 
                     g_spellChecker->misspelled.count);
             SetWindowText(hwndMain, titleText);
         }
@@ -135,7 +135,7 @@ void CALLBACK SpellCheckTimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD 
         // Restore normal title
         HWND hwndMain = GetParent(g_hwndInput);
         if (hwndMain) {
-            SetWindowText(hwndMain, "Work Log Aggregator");
+            SetWindowText(hwndMain, "Logger- Your Work Log Aggregator!");
         }
     }
     
@@ -289,12 +289,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     wc.lpszClassName = CLASS_NAME;
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);  // Set window background color
 
+    // Load and set the icon from file
+    wc.hIcon = (HICON)LoadImage(NULL, "Logger_icon.ico", IMAGE_ICON, 0, 0, LR_LOADFROMFILE | LR_DEFAULTSIZE);
+    
     RegisterClass(&wc);
 
     HWND hwnd = CreateWindowEx(
         0,
         CLASS_NAME,
-        "Work Log Aggregator",
+        "Logger - Your Work Log Aggregator!",
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT, 500, 400,
         NULL,
