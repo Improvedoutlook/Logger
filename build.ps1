@@ -7,51 +7,62 @@ Two common approaches shown:
 
 Run from project root (where main.c and Logger_icon.ico live):
     .\build.ps1
-
+.\Logger = normal build/run
+.\Logger -Gui = GUI build/run
 #>
 
 param(
-    [string]$Output = "Logger.exe",
-    [string]$Source = "main.c",
-    [string]$Resource = "Logger.rc",
+    [ValidateNotNullOrEmpty()][string]$Output = "Logger.exe",
+    [ValidateNotNullOrEmpty()][string]$Source = "main.c",
+    [ValidateNotNullOrEmpty()][string]$Resource = "Logger.rc",
     [switch]$Gui
 )
+function Invoke-BuildWithMinGW {
+    param()
 
-function Build-With-Mingw {
-    Write-Host "Building with MinGW (windres + gcc)..."
+    Write-Host "Building with MinGW (windres + gcc)..." -ForegroundColor Cyan
 
-    # Look for windres in PATH
-    $windres = Get-Command windres -ErrorAction SilentlyContinue
-    if (-not $windres) {
-        Write-Host "windres not found in PATH. Install mingw-w64 or MSYS2 and ensure windres is available." -ForegroundColor Yellow
-        return
+    # Validate source/resource files
+    if (-not (Test-Path -Path $Resource)) {
+        throw "Resource file '$Resource' not found."
+    }
+    if (-not (Test-Path -Path $Source)) {
+        throw "Source file '$Source' not found."
+    }
+
+    # Locate tools in PATH
+    $windresCmd = Get-Command windres -ErrorAction SilentlyContinue
+    if (-not $windresCmd) {
+        throw "windres not found in PATH. Install mingw-w64 or MSYS2 and ensure windres is available."
+    }
+    $gccCmd = Get-Command gcc -ErrorAction SilentlyContinue
+    if (-not $gccCmd) {
+        throw "gcc not found in PATH. Install mingw-w64 or MSYS2 and ensure gcc is available."
     }
 
     # Compile the resource script into a .res file
     $resFile = "Logger.res"
-    & windres.exe $Resource -O coff -o $resFile
-    if ($LASTEXITCODE -ne 0) { throw "windres failed" }
+    & $windresCmd.Path $Resource -O coff -o $resFile
+    if ($LASTEXITCODE -ne 0) { throw "windres failed with exit code $LASTEXITCODE" }
 
     # Compile and link the program with the resource
-    if ($Gui) {
-        # -mwindows makes a GUI subsystem executable (no console)
-        & gcc.exe $Source $resFile -o $Output -mwindows
-    } else {
-        & gcc.exe $Source $resFile -o $Output
-    }
-    if ($LASTEXITCODE -ne 0) { throw "gcc failed" }
+    $gccArgs = @($Source, "spellchecker.c", $resFile, '-o', $Output)
+    if ($Gui) { $gccArgs += '-mwindows' }
+
+    & $gccCmd.Path @gccArgs
+    if ($LASTEXITCODE -ne 0) { throw "gcc failed with exit code $LASTEXITCODE" }
 
     Write-Host "Built $Output successfully." -ForegroundColor Green
 }
 
-function Build-With-VisualStudio {
+function Show-VisualStudioInstructions {
     Write-Host "If you're using Visual Studio, add the .rc to your project and set the icon as the application's icon via Project Properties -> Linker -> Manifest -> Icon or via the Resources view." -ForegroundColor Cyan
-    Write-Host "From the Developer Command Prompt you could also run: rc.exe Logger.rc && cl /Fe:$Output main.c Logger.res" -ForegroundColor Cyan
+    Write-Host "From the Developer Command Prompt you could also run: rc.exe $Resource && cl /Fe:$Output $Source Logger.res" -ForegroundColor Cyan
 }
 
 # Main
 try {
-    Build-With-Mingw
+    Invoke-BuildWithMinGW
 } catch {
     Write-Host "Build failed: $_" -ForegroundColor Red
     exit 1

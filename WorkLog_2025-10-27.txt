@@ -1,0 +1,9 @@
+[3:01pm] Meetings, project management, backlog grooming, admin work
+
+Elevita welcome meeting to introduce new team and discuss high level intentions and begin setting up local Dev environment and software architecture.
+
+
+
+Researching new technologies, frameworks, or tools
+
+Researched GSAP as a possibe JS library solution to our deire for a "modern" UI feel. Have a GSAP Summary doc
