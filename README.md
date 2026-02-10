@@ -328,3 +328,7 @@ Technical questions? Check [SPELLCHECK_README.md](SPELLCHECK_README.md)
 **Status**: ✅ Complete  
 **Date**: November 15, 2025  
 **Quality**: Production Ready  
+
+## License
+
+License: MIT — see the LICENSE file for details.
