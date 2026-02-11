@@ -1,0 +1,422 @@
+name: Synchronize Main and Develop-Main Branches
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Perform a dry run without creating PRs'
+        required: false
+        default: 'false'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync-branches:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Check if both branches exist
+        id: check_branches
+        run: |
+          git fetch origin
+          
+          # Check if main branch exists
+          if git rev-parse --verify origin/main >/dev/null 2>&1; then
+            echo "main_exists=true" >> $GITHUB_OUTPUT
+            echo "✅ Branch 'main' exists"
+          else
+            echo "main_exists=false" >> $GITHUB_OUTPUT
+            echo "❌ Branch 'main' does not exist"
+          fi
+          
+          # Check if develop-main branch exists
+          if git rev-parse --verify origin/develop-main >/dev/null 2>&1; then
+            echo "develop_main_exists=true" >> $GITHUB_OUTPUT
+            echo "✅ Branch 'develop-main' exists"
+          else
+            echo "develop_main_exists=false" >> $GITHUB_OUTPUT
+            echo "❌ Branch 'develop-main' does not exist"
+          fi
+      
+      - name: Report single branch scenario
+        if: steps.check_branches.outputs.main_exists != 'true' || steps.check_branches.outputs.develop_main_exists != 'true'
+        run: |
+          echo "⚠️  Only one of the branches exists. No PR will be created."
+          echo "Main exists: ${{ steps.check_branches.outputs.main_exists }}"
+          echo "Develop-main exists: ${{ steps.check_branches.outputs.develop_main_exists }}"
+          exit 0
+      
+      - name: Create first PR (develop-main → main)
+        if: steps.check_branches.outputs.main_exists == 'true' && steps.check_branches.outputs.develop_main_exists == 'true'
+        id: create_pr_1
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Fetch latest changes
+          git fetch origin main develop-main
+          
+          # Check if branches are already identical
+          main_commit=$(git rev-parse origin/main)
+          develop_main_commit=$(git rev-parse origin/develop-main)
+          
+          if [ "$main_commit" = "$develop_main_commit" ]; then
+            echo "✅ Branches are already identical (both at commit $main_commit)"
+            echo "branches_identical=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          echo "branches_identical=false" >> $GITHUB_OUTPUT
+          
+          # Get list of changed files
+          git diff --name-only origin/main...origin/develop-main > /tmp/changed_files.txt || true
+          
+          # Check for merge conflicts
+          git checkout -b temp-merge-check origin/main
+          if git merge --no-commit --no-ff origin/develop-main 2>&1 | tee /tmp/merge_output.txt; then
+            echo "has_conflicts=false" >> $GITHUB_OUTPUT
+            echo "✅ No merge conflicts detected"
+            git merge --abort 2>/dev/null || true
+          else
+            echo "has_conflicts=true" >> $GITHUB_OUTPUT
+            echo "⚠️  Merge conflicts detected"
+            
+            # Get list of conflicting files
+            git diff --name-only --diff-filter=U > /tmp/conflict_files.txt || true
+            git merge --abort 2>/dev/null || true
+          fi
+          
+          # Build PR body
+          pr_body="Sync PR created by GitHub Copilot Chat Assistant at user's request (owner: improvedoutlook) — please review and merge.
+
+          ## Changed Files
+          "
+          
+          if [ -f /tmp/changed_files.txt ]; then
+            while IFS= read -r file; do
+              pr_body="${pr_body}
+          - \`${file}\`"
+            done < /tmp/changed_files.txt
+          fi
+          
+          if [ -f /tmp/conflict_files.txt ] && [ -s /tmp/conflict_files.txt ]; then
+            pr_body="${pr_body}
+
+          ## ⚠️ Merge Conflicts Detected
+
+          The following files have conflicts:
+          "
+            while IFS= read -r file; do
+              pr_body="${pr_body}
+          - \`${file}\`"
+            done < /tmp/conflict_files.txt
+            
+            pr_body="${pr_body}
+
+          **Action Required:** Please resolve these conflicts manually before merging."
+          else
+            pr_body="${pr_body}
+
+          ✅ No conflicts detected. This PR should be safe to merge."
+          fi
+          
+          # Save PR body to file
+          echo "$pr_body" > /tmp/pr_body.txt
+          
+          if [ "${{ inputs.dry_run }}" != "true" ]; then
+            # Check if PR already exists
+            existing_pr=$(gh pr list --base main --head develop-main --json number --jq '.[0].number' || echo "")
+            
+            if [ -n "$existing_pr" ]; then
+              echo "pr_number=$existing_pr" >> $GITHUB_OUTPUT
+              echo "✅ PR already exists: #$existing_pr"
+              
+              # Update PR body if it has conflicts
+              if [ -f /tmp/conflict_files.txt ] && [ -s /tmp/conflict_files.txt ]; then
+                gh pr edit "$existing_pr" --body-file /tmp/pr_body.txt
+                gh pr edit "$existing_pr" --add-label "needs-review,sync-conflict"
+              fi
+            else
+              # Create new PR
+              pr_url=$(gh pr create \
+                --base main \
+                --head develop-main \
+                --title "Sync: Merge develop-main into main" \
+                --body-file /tmp/pr_body.txt)
+              
+              pr_number=$(echo "$pr_url" | grep -oP '\d+$')
+              echo "pr_number=$pr_number" >> $GITHUB_OUTPUT
+              echo "pr_url=$pr_url" >> $GITHUB_OUTPUT
+              echo "✅ Created PR #$pr_number: $pr_url"
+              
+              # Add labels if there are conflicts
+              if [ -f /tmp/conflict_files.txt ] && [ -s /tmp/conflict_files.txt ]; then
+                gh pr edit "$pr_number" --add-label "needs-review,sync-conflict"
+                echo "⚠️  Added labels: needs-review, sync-conflict"
+              fi
+            fi
+          else
+            echo "🔍 Dry run mode - would create PR from develop-main to main"
+          fi
+      
+      - name: Merge first PR if possible
+        if: steps.create_pr_1.outputs.branches_identical != 'true' && steps.create_pr_1.outputs.pr_number != '' && steps.create_pr_1.outputs.has_conflicts != 'true'
+        id: merge_pr_1
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pr_number="${{ steps.create_pr_1.outputs.pr_number }}"
+          
+          if [ "${{ inputs.dry_run }}" != "true" ]; then
+            # Check if PR is mergeable
+            mergeable=$(gh pr view "$pr_number" --json mergeable --jq '.mergeable')
+            
+            if [ "$mergeable" = "MERGEABLE" ]; then
+              # Try to merge with normal merge commit
+              if gh pr merge "$pr_number" --merge --auto=false 2>&1 | tee /tmp/merge_result.txt; then
+                echo "merge_success=true" >> $GITHUB_OUTPUT
+                echo "✅ Successfully merged PR #$pr_number"
+              else
+                echo "merge_success=false" >> $GITHUB_OUTPUT
+                echo "⚠️  Failed to merge PR #$pr_number"
+                
+                # Check if it's due to branch protection
+                if grep -q "protection" /tmp/merge_result.txt || grep -q "required" /tmp/merge_result.txt; then
+                  # Update PR body to note branch protection
+                  current_body=$(gh pr view "$pr_number" --json body --jq '.body')
+                  new_body="${current_body}
+
+          ---
+          ⚠️ **Branch Protection**: This PR cannot be automatically merged due to branch protection rules. Manual review and approval may be required."
+                  
+                  echo "$new_body" | gh pr edit "$pr_number" --body-file -
+                  echo "⚠️  Branch protection prevents automatic merging"
+                fi
+              fi
+            else
+              echo "merge_success=false" >> $GITHUB_OUTPUT
+              echo "⚠️  PR is not mergeable (status: $mergeable)"
+            fi
+          else
+            echo "🔍 Dry run mode - would attempt to merge PR #$pr_number"
+          fi
+      
+      - name: Verify branches are identical
+        if: steps.merge_pr_1.outputs.merge_success == 'true'
+        id: verify_identical
+        run: |
+          # Fetch latest changes after merge
+          git fetch origin main develop-main
+          
+          # Compare commits
+          main_commit=$(git rev-parse origin/main)
+          develop_main_commit=$(git rev-parse origin/develop-main)
+          
+          if [ "$main_commit" = "$develop_main_commit" ]; then
+            echo "identical=true" >> $GITHUB_OUTPUT
+            echo "✅ Branches are now identical"
+          else
+            echo "identical=false" >> $GITHUB_OUTPUT
+            echo "⚠️  Branches are still different after merge"
+            
+            # Compare file trees
+            git diff --name-only origin/main origin/develop-main > /tmp/diff_files.txt || true
+            if [ -s /tmp/diff_files.txt ]; then
+              echo "Files still different:"
+              cat /tmp/diff_files.txt
+            fi
+          fi
+      
+      - name: Create second PR (main → develop-main) if needed
+        if: steps.verify_identical.outputs.identical == 'false'
+        id: create_pr_2
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Get list of changed files
+          git diff --name-only origin/develop-main...origin/main > /tmp/changed_files_2.txt || true
+          
+          # Check for merge conflicts
+          git checkout -b temp-merge-check-2 origin/develop-main
+          if git merge --no-commit --no-ff origin/main 2>&1 | tee /tmp/merge_output_2.txt; then
+            echo "has_conflicts=false" >> $GITHUB_OUTPUT
+            echo "✅ No merge conflicts detected for second PR"
+            git merge --abort 2>/dev/null || true
+          else
+            echo "has_conflicts=true" >> $GITHUB_OUTPUT
+            echo "⚠️  Merge conflicts detected for second PR"
+            
+            # Get list of conflicting files
+            git diff --name-only --diff-filter=U > /tmp/conflict_files_2.txt || true
+            git merge --abort 2>/dev/null || true
+          fi
+          
+          # Build PR body
+          pr_body="Sync PR created by GitHub Copilot Chat Assistant at user's request (owner: improvedoutlook) — please review and merge.
+
+          This is a follow-up sync to ensure both branches are identical.
+
+          ## Changed Files
+          "
+          
+          if [ -f /tmp/changed_files_2.txt ]; then
+            while IFS= read -r file; do
+              pr_body="${pr_body}
+          - \`${file}\`"
+            done < /tmp/changed_files_2.txt
+          fi
+          
+          if [ -f /tmp/conflict_files_2.txt ] && [ -s /tmp/conflict_files_2.txt ]; then
+            pr_body="${pr_body}
+
+          ## ⚠️ Merge Conflicts Detected
+
+          The following files have conflicts:
+          "
+            while IFS= read -r file; do
+              pr_body="${pr_body}
+          - \`${file}\`"
+            done < /tmp/conflict_files_2.txt
+            
+            pr_body="${pr_body}
+
+          **Action Required:** Please resolve these conflicts manually before merging."
+          else
+            pr_body="${pr_body}
+
+          ✅ No conflicts detected. This PR should be safe to merge."
+          fi
+          
+          # Save PR body to file
+          echo "$pr_body" > /tmp/pr_body_2.txt
+          
+          if [ "${{ inputs.dry_run }}" != "true" ]; then
+            # Check if PR already exists
+            existing_pr=$(gh pr list --base develop-main --head main --json number --jq '.[0].number' || echo "")
+            
+            if [ -n "$existing_pr" ]; then
+              echo "pr_number=$existing_pr" >> $GITHUB_OUTPUT
+              echo "✅ PR already exists: #$existing_pr"
+              
+              # Update PR body if it has conflicts
+              if [ -f /tmp/conflict_files_2.txt ] && [ -s /tmp/conflict_files_2.txt ]; then
+                gh pr edit "$existing_pr" --body-file /tmp/pr_body_2.txt
+                gh pr edit "$existing_pr" --add-label "needs-review,sync-conflict"
+              fi
+            else
+              # Create new PR
+              pr_url=$(gh pr create \
+                --base develop-main \
+                --head main \
+                --title "Sync: Merge main into develop-main" \
+                --body-file /tmp/pr_body_2.txt)
+              
+              pr_number=$(echo "$pr_url" | grep -oP '\d+$')
+              echo "pr_number=$pr_number" >> $GITHUB_OUTPUT
+              echo "pr_url=$pr_url" >> $GITHUB_OUTPUT
+              echo "✅ Created PR #$pr_number: $pr_url"
+              
+              # Add labels if there are conflicts
+              if [ -f /tmp/conflict_files_2.txt ] && [ -s /tmp/conflict_files_2.txt ]; then
+                gh pr edit "$pr_number" --add-label "needs-review,sync-conflict"
+                echo "⚠️  Added labels: needs-review, sync-conflict"
+              fi
+            fi
+          else
+            echo "🔍 Dry run mode - would create PR from main to develop-main"
+          fi
+      
+      - name: Merge second PR if possible
+        if: steps.create_pr_2.outputs.pr_number != '' && steps.create_pr_2.outputs.has_conflicts != 'true'
+        id: merge_pr_2
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pr_number="${{ steps.create_pr_2.outputs.pr_number }}"
+          
+          if [ "${{ inputs.dry_run }}" != "true" ]; then
+            # Check if PR is mergeable
+            mergeable=$(gh pr view "$pr_number" --json mergeable --jq '.mergeable')
+            
+            if [ "$mergeable" = "MERGEABLE" ]; then
+              # Try to merge with normal merge commit
+              if gh pr merge "$pr_number" --merge --auto=false 2>&1 | tee /tmp/merge_result_2.txt; then
+                echo "merge_success=true" >> $GITHUB_OUTPUT
+                echo "✅ Successfully merged PR #$pr_number"
+              else
+                echo "merge_success=false" >> $GITHUB_OUTPUT
+                echo "⚠️  Failed to merge PR #$pr_number"
+                
+                # Check if it's due to branch protection
+                if grep -q "protection" /tmp/merge_result_2.txt || grep -q "required" /tmp/merge_result_2.txt; then
+                  # Update PR body to note branch protection
+                  current_body=$(gh pr view "$pr_number" --json body --jq '.body')
+                  new_body="${current_body}
+
+          ---
+          ⚠️ **Branch Protection**: This PR cannot be automatically merged due to branch protection rules. Manual review and approval may be required."
+                  
+                  echo "$new_body" | gh pr edit "$pr_number" --body-file -
+                  echo "⚠️  Branch protection prevents automatic merging"
+                fi
+              fi
+            else
+              echo "merge_success=false" >> $GITHUB_OUTPUT
+              echo "⚠️  PR is not mergeable (status: $mergeable)"
+            fi
+          else
+            echo "🔍 Dry run mode - would attempt to merge PR #$pr_number"
+          fi
+      
+      - name: Final verification
+        if: steps.merge_pr_2.outputs.merge_success == 'true'
+        run: |
+          # Fetch latest changes
+          git fetch origin main develop-main
+          
+          # Compare commits
+          main_commit=$(git rev-parse origin/main)
+          develop_main_commit=$(git rev-parse origin/develop-main)
+          
+          if [ "$main_commit" = "$develop_main_commit" ]; then
+            echo "✅ SUCCESS: Both branches are now identical!"
+            echo "Commit: $main_commit"
+          else
+            echo "⚠️  WARNING: Branches are still different"
+            echo "main: $main_commit"
+            echo "develop-main: $develop_main_commit"
+          fi
+      
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Branch Synchronization Summary"
+          echo ""
+          echo "Main exists: ${{ steps.check_branches.outputs.main_exists }}"
+          echo "Develop-main exists: ${{ steps.check_branches.outputs.develop_main_exists }}"
+          echo ""
+          if [ "${{ steps.check_branches.outputs.main_exists }}" = "true" ] && [ "${{ steps.check_branches.outputs.develop_main_exists }}" = "true" ]; then
+            if [ "${{ steps.create_pr_1.outputs.branches_identical }}" = "true" ]; then
+              echo "✅ Branches were already identical - no action needed"
+            else
+              echo "First PR (develop-main → main):"
+              echo "  - PR Number: ${{ steps.create_pr_1.outputs.pr_number }}"
+              echo "  - Has Conflicts: ${{ steps.create_pr_1.outputs.has_conflicts }}"
+              echo "  - Merge Success: ${{ steps.merge_pr_1.outputs.merge_success }}"
+              echo ""
+              if [ "${{ steps.create_pr_2.outputs.pr_number }}" != "" ]; then
+                echo "Second PR (main → develop-main):"
+                echo "  - PR Number: ${{ steps.create_pr_2.outputs.pr_number }}"
+                echo "  - Has Conflicts: ${{ steps.create_pr_2.outputs.has_conflicts }}"
+                echo "  - Merge Success: ${{ steps.merge_pr_2.outputs.merge_success }}"
+              fi
+            fi
+          else
+            echo "⚠️  Only one branch exists - no PR created"
+          fi
